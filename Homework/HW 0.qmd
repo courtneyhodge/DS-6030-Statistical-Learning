@@ -15,6 +15,7 @@ ggplot2::theme_set(ggplot2::theme_bw()) # set ggplot2 theme
 ```{r packages, message=FALSE, warning=FALSE}
 data_dir = 'https://mdporter.github.io/teaching/data/' # data directory
 library(tidyverse) # functions for data manipulation
+
 ```
 
 # Getting Help
@@ -139,7 +140,17 @@ Read the following sections in [R for Data Science 2e](https://r4ds.hadley.nz/):
 ## a. What are the equations for the least squares coefficients in linear regression (in matrix notation)? Use $X$ for the model/design/predictor matrix, and $Y$ the vector of outcomes.
 
 ::: {.callout-note title="Solution"}
-Add solution here
+Something here $X$
+$$
+X^TX
+$$
+```{r}
+x = 1:10
+y = 2:11
+x*y
+```
+
+
 :::
 
 ## b. Let $x_1, x_2, \ldots, x_n$ be a sample of length of time that a customer is on the phone with a call center help line. We feel comfortable modeling the data as coming from an *exponential distribution*. What is the MLE (Maximum Likelihood Estimate) of the parameter? Show your steps.
