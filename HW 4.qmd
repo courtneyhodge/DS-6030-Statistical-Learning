@@ -1,0 +1,291 @@
+---
+title: "Homework #4: Trees and Random Forest" 
+author: "Courtney Hodge"
+format: ds6030hw-html
+---
+
+::: {style="background-color:yellow; color:red; display: block; border-color: black; padding:1em"}
+This is an **independent assignment**. Do not discuss or work with classmates.
+:::
+
+```{r config, include=FALSE}
+# Set global configurations and settings here
+knitr::opts_chunk$set()                 # set global chunk options
+ggplot2::theme_set(ggplot2::theme_bw()) # set ggplot2 theme
+```
+
+# Required R packages and Directories {.unnumbered .unlisted}
+
+```{r packages, message=FALSE, warning=FALSE}
+data_dir = 'https://mdporter.github.io/teaching/data/' # data directory
+library(tidyverse)    # functions for data manipulation  
+library(ranger)       # fast random forest implementation
+library(modeldata)    # for the ames housing data
+```
+
+# Problem 1: Tree splitting metrics for classification
+
+Consider the Gini index, classification error, and entropy impurity measures in a simple classification setting with two classes.
+
+Create a single plot that displays each of these quantities as a function of $p_m$, the estimated probability of an observation in node $m$ being from class 1. The x-axis should display $p_m$, ranging from 0 to 1, and the y-axis should display the value of the Gini index, classification error, and entropy.
+
+::: {.callout-note title="Solution"}
+```{r}
+# Load ggplot2 library
+library(ggplot2)
+
+#Define p_m
+p_m <- seq(0, 1, by = 0.01)
+
+#Calculate the impurity measures
+
+# Gini index
+gini <- 2 * p_m * (1 - p_m)
+
+# Classification Error
+class_error <- 1 - pmax(p_m, 1 - p_m)
+
+# Entropy (handle 0*log(0) cases by replacing NaN with 0)
+entropy <- -p_m * log2(p_m) - (1 - p_m) * log2(1 - p_m)
+entropy[is.nan(entropy)] <- 0  # Set NaN values to 0 (for p_m = 0 or 1)
+
+#Create a data frame for ggplot
+df <- data.frame(
+  p_m = rep(p_m, 3),
+  Impurity = c(gini, class_error, entropy),
+  Measure = factor(rep(c("Gini Index", "Classification Error", "Entropy"), each = length(p_m)))
+)
+
+#plot
+ggplot(df, aes(x = p_m, y = Impurity, color = Measure)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Impurity Measures as a Function of p_m",
+    x = expression(p[m]),
+    y = "Impurity"
+  )
+
+```
+:::
+
+# Problem 2: Combining bootstrap estimates
+
+```{r, echo=FALSE}
+p_red = c(0.2, 0.25, 0.3, 0.4, 0.4, 0.45, 0.7, 0.85, 0.9, 0.9)
+```
+
+Suppose we produce ten bootstrapped samples from a data set containing red and green classes. We then apply a classification tree to each bootstrapped sample and, for a specific value of $X$, produce the following 10 estimates of $\Pr(\text{Class is Red} \mid X=x)$: $\{`r stringr::str_c(p_red, sep=", ")`\}$.
+
+## a. Majority Vote
+
+ISLR 8.2 describes the *majority vote* approach for making a hard classification from a set of bagged classifiers. What is the final classification for this example using majority voting?
+
+::: {.callout-note title="Solution"}
+> Using the majority vote, we can classify each of the 10 bootstrapped results as "Red" or "Green" using a 0.5 threshold (over 0.5, likely "Red", under 0.5, likely "Green") for the probability estimate. So we can say:
+
+$Pr(\text{Class is Red}| X = x) \geqq 0.5, \text{the class is "Red"}$
+
+$Pr(\text{Class is Red}| X = x) \lt 0.5, \text{the class is "Green"}$
+
+> The majority vote rule says that the class with the most votes becomes the final classification. Based on the given probabilities:
+
+Probabilities less than 0.5: {0.2,0.25,0.3,0.4,0.4,0.45} — classify as "Green".
+
+> and
+
+Probabilities greater than or equal to 0.5: {0.7,0.85,0.9,0.9} — classify as "Red".
+
+> **So total "Green": 6 votes and total "Red": 4 votes. This means the FINAL CLASSIFICATION is "Green"**
+:::
+
+## b. Average Probability
+
+An alternative is to base the final classification on the average probability. What is the final classification for this example using average probability?
+
+::: {.callout-note title="Solution"}
+> Using the average probability approach, we can find the final classification by calculating the average probability and classify based on this average using the same threshold of 0.5. We can now say:
+
+If the avg prob is $\geqq$ to 0.5, classify as "Red"
+
+If the avg prob is $\lt$ 0.5, classify as "Green"
+
+> Based on the given probabilities, we can calculate the avg prob as:
+
+```{r}
+avg_prob <- mean(p_red)
+avg_prob
+```
+
+> **Since the average probability 0.535 \> 0.5, the FINAL CLASSFICATION is "Red"**
+:::
+
+# Problem 3: Random Forest Tuning
+
+Random forest has several tuning parameters that you will explore in this problem. We will use the `ames` housing data from the `modeldata` R package.
+
+There are several R packages for Random Forest. The `ranger::ranger()` function is much faster than `randomForest::randomForest()` so we will use this one.
+
+## a. Random forest (`ranger`) tuning parameters
+
+List all of the random forest tuning parameters in the `ranger::ranger()` function. You don't need to list the parameters related to computation, special models (e.g., survival, maxstat), or anything that won't impact the predictive performance.
+
+Indicate the tuning parameters you think will be most important to optimize?
+
+::: {.callout-note title="Solution"}
+```{r}
+library("modeldata")
+library("ranger")
+head(ames)
+```
+
+> Below is a list of all the relevant random forest tuning parameters in the ranger function that impact the predictive performance. After calling ?ranger in the console window, the non-important tuning parameters are filtered out and we're left with these arguments to answer part a:
+
+**Tuning Parameters for Predictive Performance in ranger()**
+
+-   num.trees - Number of trees.
+
+-   mtry - Number of variables to possibly split at in each node. Default is the (rounded down) square root of the number variables. Alternatively, a single argument function returning an integer, given the number of independent variables.
+
+-   min.node.size - Minimal node size to split at. Default 1 for classification, 5 for regression, 3 for survival, and 10 for probability.
+
+-   sample.fraction - Fraction of observations to sample. Default is 1 for sampling with replacement and 0.632 for sampling without replacement. For classification, this can be a vector of class-specific values.
+
+-   importance - Variable importance mode, one of 'none', 'impurity', 'impurity_corrected', 'permutation'. The 'impurity' measure is the Gini index for classification, the variance of the responses for regression and the sum of test statistics (see splitrule) for survival.
+
+-   splitrule - Splitting rule. For classification and probability estimation "gini", "extratrees" or "hellinger" with default "gini". For regression "variance", "extratrees", "maxstat" or "beta" with default "variance". For survival "logrank", "extratrees", "C" or "maxstat" with default "logrank".
+
+**Tuning Parameters Most Important to Optimize**
+
+-   mtry
+
+-   min.node.size
+
+-   num.trees
+
+-   sample.fraction
+:::
+
+## b. Implement Random Forest
+
+Use a random forest model to predict the sales price, `Sale_Price`. Use the default parameters and report the 10-fold cross-validation RMSE (square root of mean squared error).
+
+::: {.callout-note title="Solution"}
+```{r}
+library("caret")
+
+#remove missing rows
+ames <- na.omit(ames)
+
+#get target variable
+target <- ames$Sale_Price
+
+#separate the features (X) and the target variable (y)
+X <- ames[, !(names(ames) %in% target)]
+y <- ames$Sale_Price
+```
+
+> Set up 10-fold CV
+
+```{r}
+set.seed(123)
+
+#10-fold cross-validation
+cv_control <- trainControl(method = 'cv', number = 10)
+
+#train the random forest model w/ ranger and a 10-fold cross-validation
+
+rf_model <- train(Sale_Price ~., data = ames, method = "ranger", trControl = cv_control, metric = "RMSE")
+
+```
+
+```{r}
+rf_model
+```
+
+> Based on the result, we can see the best 10-fold CV RMSE for this random forest was found at the following combination:
+
+-   mtry = 276
+
+-   splitrule = extratrees
+
+-   min.node.size = 5
+
+> **This model provided the best RMSE of 27318.16**
+:::
+
+## c. Random Forest Tuning
+
+Now we will vary the tuning parameters of `mtry` and `min.bucket` to see what effect they have on performance.
+
+-   Use a range of reasonable `mtry` and `min.bucket` values.
+    -   The valid `mtry` values are $\{1,2, \ldots, p\}$ where $p$ is the number of predictor variables. However the default value of `mtry = sqrt(p) =` `r sqrt(ncol(ames)-1) %>% floor()` is usually close to optimal, so you may want to focus your search around those values.
+    -   The default `min.bucket=1` will grow deep trees. This will usually work best if there are enough trees. But try some values larger and see how it impacts predictive performance.
+    -   Set `num.trees=1000`, which is larger than the default of 500.
+-   Use 5 times repeated out-of-bag (OOB) to assess performance. That is, run random forest 5 times for each tuning set, calculate the OOB MSE each time and use the average for the MSE associated with the tuning parameters.
+-   Use a single plot to show the average MSE as a function of `mtry` and `min.bucket`.
+-   Report the best tuning parameter combination.
+-   Note: random forest is a stochastic model; it will be different every time it runs due to the bootstrap sampling and random selection of features to consider for splitting. Set the random seed to control the uncertainty associated with the stochasticity.
+-   Hint: If you use the `ranger` package, the `prediction.error` element in the output is the OOB MSE.
+
+::: {.callout-note title="Solution"}
+```{r}
+set.seed(123)
+
+#set number of predictors (p) and default mtry values
+p <- ncol(ames) - 1 #subtract 1 for terget variable (Sale_Price)
+
+default_mtry <- floor(sqrt(p)) #default mtry = sqrt(p)
+
+#define a range of mtry and min.bucket values
+mtry_values <- seq(max(1, default_mtry - 2), default_mtry + 2, by = 1)
+
+#start w/ default and try larger values
+min_bucket_values <- c(1, 5, 10, 20) 
+
+#number of trees
+num_trees <- 1000
+
+#function to train a random forest model and return OOB MSE
+rf_oob_mse <- function(mtry, min_bucket, num_repeats = 5) {
+  oob_mse_values <- numeric(num_repeats)
+  for (i in 1:num_repeats) {
+    model <- ranger(
+      Sale_Price ~ ., 
+      data = ames, 
+      mtry = mtry, 
+      min.node.size = min_bucket, 
+      num.trees = num_trees,
+      oob.error = TRUE
+    )
+    oob_mse_values[i] <- model$prediction.error
+  }
+  return(mean(oob_mse_values))  # Return the average OOB MSE across repeats
+}
+
+# Create a data frame to store the results
+results <- expand.grid(mtry = mtry_values, min_bucket = min_bucket_values) %>%
+  mutate(OOB_MSE = purrr::map2_dbl(mtry, min_bucket, rf_oob_mse))
+
+```
+
+```{r}
+# Plot the average OOB MSE as a function of mtry and min.bucket
+ggplot(results, aes(x = mtry, y = OOB_MSE, color = factor(min_bucket))) +
+  geom_line(size = 1) +
+  labs(
+    title = "Average OOB MSE as a function of mtry and min.bucket",
+    x = "mtry",
+    y = "Average OOB MSE",
+    color = "min.bucket"
+  )
+```
+
+```{r}
+# Find the best tuning parameter combination
+best_params <- results %>%
+  arrange(OOB_MSE) %>%
+  slice(1)
+
+best_params
+```
+:::

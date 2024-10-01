@@ -1,0 +1,296 @@
+---
+title: "Homework #3: Penalized Regression" 
+author: "Courtney Hodge"
+format: ds6030hw-html
+---
+
+# Required R packages and Directories {.unnumbered .unlisted}
+
+```{r packages, message=FALSE, warning=FALSE}
+data_dir = 'https://mdporter.github.io/teaching/data/' # data directory
+library(mlbench)
+library(glmnet)
+library(tidymodels)# for optional tidymodels solutions
+library(tidyverse) # functions for data manipulation  
+```
+
+# Problem 1: Optimal Tuning Parameters
+
+In cross-validation, we discussed choosing the tuning parameter values that minimized the cross-validation error. Another approach, called the "one-standard error" rule \[ISL pg 214, ESL pg 61\], uses the values corresponding to the least complex model whose cv error is within one standard error of the best model. The goal of this assignment is to compare these two rules.
+
+Use simulated data from `mlbench.friedman1(n, sd=2)` in the `mlbench` R package to fit *lasso models*. The tuning parameter $\lambda$ (corresponding to the penalty on the coefficient magnitude) is the one we will focus one. Generate training data, use k-fold cross-validation to get $\lambda_{\rm min}$ and $\lambda_{\rm 1SE}$, generate test data, make predictions for the test data, and compare performance of the two rules under a squared error loss using a hypothesis test.
+
+Choose reasonable values for:
+
+-   Number of cv folds ($K$)
+    -   Note: you are free to use repeated CV, repeated hold-outs, or bootstrapping instead of plain cross-validation; just be sure to describe what do did so it will be easier to follow.
+-   Number of training and test observations
+-   Number of simulations
+-   If everyone uses different values, we will be able to see how the results change over the different settings.
+-   Don't forget to make your results reproducible (e.g., set seed)
+
+This pseudo code (using k-fold cv) will get you started:
+
+``` yaml
+library(mlbench)
+library(glmnet)
+
+#-- Settings
+n_train =        # number of training obs
+n_test =         # number of test obs
+K =              # number of CV folds
+alpha =          # glmnet tuning alpha (1 = lasso, 0 = ridge)
+M =              # number of simulations
+
+#-- Data Generating Function
+getData <- function(n) mlbench.friedman1(n, sd=2) # data generating function
+
+#-- Simulations
+# Set Seed Here
+
+for(m in 1:M) {
+
+# 1. Generate Training Data
+# 2. Build Training Models using cross-validation, e.g., cv.glmnet()
+# 3. get lambda that minimizes cv error and 1 SE rule
+# 4. Generate Test Data
+# 5. Predict y values for test data (for each model: min, 1SE)
+# 6. Evaluate predictions
+
+}
+
+#-- Compare
+# compare performance of the approaches / Statistical Test
+```
+
+## a. Code for the simulation and performance results
+
+::: {.callout-note title="Solution"}
+```{r}
+library(mlbench)
+library(glmnet)
+
+#-- Settings
+n_train =      200  # number of training obs
+n_test =       50  # number of test obs
+K =            10  # number of CV folds
+alpha =         1 # glmnet tuning alpha (1 = lasso, 0 = ridge)
+M =             10 # number of simulations
+
+#-- Data Generating Function
+getData <- function(n){
+  data <- mlbench.friedman1(n, sd=2)
+  X <- as.data.frame(data$x)
+  y <- data$y
+  return(list(X=X, y=y))
+} 
+
+#-- Simulations
+# Set Seed Here
+set.seed(100)
+
+######
+#initializing vectors to store perfomrance metrics for both models
+squared_error_min <- numeric(M)
+squared_error_1se <- numeric(M)
+
+for(m in 1:M) {
+  
+  # 1. Generate Training Data
+  train_data <- getData(n_train)
+  X_train <- as.matrix(train_data$X)
+  y_train <- train_data$y
+  
+  # 2. Build Training Models using cross-validation
+  cv_fit <- cv.glmnet(X_train, y_train, alpha = alpha, nfolds = K)
+  
+  # 3. Get lambda that minimizes cv error and 1 SE rule
+  lambda_min <- cv_fit$lambda.min
+  lambda_1se <- cv_fit$lambda.1se
+  
+  # 4. Generate Test Data
+  test_data <- getData(n_test)
+  X_test <- as.matrix(test_data$X)
+  y_test <- test_data$y
+  
+  # 5. Predict y values for test data (for each model: min, 1SE)
+  y_pred_min <- predict(cv_fit, newx = X_test, s = lambda_min)
+  y_pred_1se <- predict(cv_fit, newx = X_test, s = lambda_1se)
+  
+  # 6. Evaluate predictions using squared error loss
+  squared_error_min[m] <- mean((y_pred_min - y_test)^2)
+  squared_error_1se[m] <- mean((y_pred_1se - y_test)^2)
+}
+
+#-- Compare performance of the two approaches using a statistical test (paired t-test)
+result <- t.test(squared_error_min, squared_error_1se, paired = TRUE)
+
+# Output the results
+cat("Paired t-test comparing lambda_min and lambda_1SE models:\n")
+print(result)
+
+# Print mean squared error for each approach
+cat("Mean Squared Error for lambda_min:", mean(squared_error_min), "\n")
+cat("Mean Squared Error for lambda_1SE:", mean(squared_error_1se), "\n")
+```
+:::
+
+## b. Hypothesis test
+
+Provide results and discussion of a hypothesis test comparing $\lambda_{\rm min}$ and $\lambda_{\rm 1SE}$.
+
+::: {.callout-note title="Solution"}
+The lambda_min model has a lower MSE of 10.6989 than the lambda_1SE model's MSE of 11.90248. This means that the lambda_min model performs better in terms of prediction accuracy, than lambda_1SE b/c of the lower average prediction error on the test_data.
+
+The t-test provides more specifics. We can see that when comparing lambda_min to lambda_1SE, the t-test value of -2.9917 shows that the lambda_min model consistently has a lower MSE than the lambda_1SE model. This is because of the negative sign in favor of the lambda_min model.
+
+The p-value is smaller than alpha = 0.05, showing evidence that there is a difference between the performance between the $\lambda_{\rm min}$ and $\lambda_{\rm 1SE}$ models.
+
+The 95% confidence interval of \[-2.1136, -0.2935\] captures the range between the true difference in MSE of the two models. Since the whole interval is negative, this means that the MSE for the lambda_min model will consistently be lower than the lambda_1SE model.
+
+Lastly, the mean difference of -1.203576 tells us that on average, the lambda_min model's MSE will be lower that the lambda_1SE model's by about 1.2 units.
+:::
+
+# Problem 2 Prediction Contest: Real Estate Pricing
+
+This problem uses the [realestate-train](%60r%20file.path(data_dir,%20'realestate-train.csv')%60) and [realestate-test](%60r%20file.path(data_dir,%20'realestate-test.csv')%60) (click on links for data).
+
+The goal of this contest is to predict sale price (in thousands) (`price` column) using an *elastic net* model. Evaluation of the test data will be based on the root mean squared error ${\rm RMSE}= \sqrt{\frac{1}{m}\sum_i (y_i - \hat{y}_i)^2}$ for the $m$ test set observations.
+
+## a. Load and pre-process data
+
+Load the data and create necessary data structures for running *elastic net*.
+
+-   You are free to use any data transformation or feature engineering
+-   Note: there are some categorical predictors so at the least you will have to convert those to something numeric (e.g., one-hot or dummy coding).
+
+::: {.callout-note title="Solution"}
+```{r}
+test_realestate<- read.csv("C:\\Users\\hodge\\Downloads\\realestate-test.csv")
+
+train_realestate <- read.csv("C:\\Users\\hodge\\Downloads\\realestate-train.csv")
+```
+
+```{r}
+library(tidymodels)
+
+#create a preprocessing recipe
+recipe_enet <- recipe(price~., data = train_realestate) |> step_dummy(all_nominal_predictors(), one_hot = TRUE) |> step_normalize(all_numeric_predictors())
+```
+
+:::
+
+## b. Fit elastic net model
+
+Use an *elastic net* model to predict the `price` of the test data.
+
+-   You are free to use any data transformation or feature engineering
+-   You are free to use any tuning parameters
+-   Report the $\alpha$ and $\lambda$ parameters you used to make your final predictions.
+-   Describe how you choose those tuning parameters
+
+::: {.callout-note title="Solution"}
+```{r}
+#defining elastic net model
+enet_spec <- linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet")
+```
+
+```{r}
+#creating the worklfow
+enet_workflow <- workflow() %>%
+  add_recipe(recipe_enet) %>%
+  add_model(enet_spec)
+```
+
+```{r}
+# Set up 5-fold cross-validation
+set.seed(123)
+folds <- vfold_cv(train_realestate, v = 5)
+
+# Create a grid of tuning values for penalty (lambda) and mixture (alpha)
+enet_grid <- grid_regular(penalty(), mixture(), levels = 10)
+
+# Tune the model across the grid
+enet_tune <- tune_grid(
+  enet_workflow,
+  resamples = folds,
+  grid = enet_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+# Collect and view the tuning results (RMSE, R2, etc.)
+collect_metrics(enet_tune)
+```
+
+```{r}
+#here, we are choosing the best combination of alpha and lambda based on RMSE
+
+# Select the best model based on RMSE
+best_params <- select_best(enet_tune, "rmse")
+
+# Finalize the workflow with the best hyperparameters
+final_enet <- finalize_workflow(
+  enet_workflow,
+  best_params
+)
+
+# Fit the model on the entire training dataset
+final_fit <- fit(final_enet, data = train_realestate)
+
+#make predictions on the test data
+
+# Predict sale price on the test data
+predictions <- predict(final_fit, new_data = test_realestate)
+
+# View the predictions
+predictions
+```
+
+```{r}
+#reporting hyperparameters below:
+best_params
+```
+> Here, pently represents our lambda value and mixture represents our alpha value. the reason why these penalties were chosen was becuase they produced the lowest RMSE during the cross-validation process. These parameters won because the resultsproduced the lowest average RMSE across all validation folds when calculating price for these houses.
+
+:::
+
+## c. Submit predictions
+
+Submit a .csv file (ensure comma separated format) named `lastname_firstname.csv` that includes your predictions in a column named *yhat*. We will use automated evaluation, so the format must be exact.
+
+-   You will receive credit for a proper submission; the top five scores will receive 2 bonus points.
+
+::: {.callout-note title="Solution"}
+
+```{r}
+predictions_df <-data.frame(yhat = predictions$.pred)
+```
+
+
+```{r}
+#write.csv(predictions_df, file = "hodge_courtney.csv", row.names = FALSE)
+```
+
+:::
+
+## d. Report anticpated performance
+
+Report the anticipated performance of your method in terms of RMSE. We will see how close your performance assessment matches the actual value.
+
+::: {.callout-note title="Solution"}
+```{r}
+# Collect the performance metrics from the tuning process
+cv_metrics <- collect_metrics(enet_tune)
+
+# Filter to get the RMSE
+rmse_metric <- cv_metrics %>% filter(.metric == "rmse")
+
+# Calculate the mean RMSE
+mean_rmse <- mean(rmse_metric$mean)
+
+# Print the average RMSE
+mean_rmse
+```
+
+:::
