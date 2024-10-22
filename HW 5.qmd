@@ -213,7 +213,59 @@ Also report the AUC (area under the ROC curve) for each model. Again, use the *t
 - Note: you should be weary of being asked to evaluation predictive performance from the same data used to estimate the tuning and model parameters. The next problem will walk you through a more proper way of evaluating predictive performance with resampling. 
 
 ::: {.callout-note title="Solution"}
-Add solution here
+```{r}
+library(pROC) #for ROC and AUC
+
+#Separate features and response
+X_train <- as.matrix(train_data[, c('spatial', 'temporal', 'tod', 'dow', 'LOC', 'POA', 'MOA', 'TIMERANGE')])
+
+y_train <- train_data$y #response is a binary variable
+
+#fit linear regression (Elastic Net)
+alpha_linear <- 0.5 #choose a 50/50 mix of ridge and lasso for elastic net
+cv_fit_linear <- cv.glmnet(X_train_scaled, y_train, alpha = alpha_linear, family = "gaussian")
+linear_preds <- predict(cv_fit_linear, newx = X_train_scaled, s = "lambda.min")
+
+#convert linear reg output to probabilities (since it's not a binary classifier)
+linear_probs <-1/(1+exp(-linear_preds)) #sigmoid function to convert to probabilities
+
+#fit Logistic Regression (elastic net)
+cv_fit_logistic <- cv.glmnet(X_train_scaled, y_train, alpha = alpha_linear, family = "binomial")
+logistic_probs <- predict(cv_fit_logistic, newx = X_train_scaled, s = "lambda.min", type = "response")
+
+#fit random forest
+rf_model <- randomForest(X_train, as.factor(y_train), ntree = 500, mtry = sqrt(ncol(X_train)))
+rf_probs <- predict(rf_model, newdata = X_train, type = "prob")[,2] #get probabilities for class 1 (linked)
+
+#compute the ROC and AUC for all models
+roc_linear <- roc(y_train, linear_probs)
+roc_logistic <- roc(y_train, logistic_probs)
+roc_rf <- roc(y_train, rf_probs)
+
+#AUC Vals
+auc_linear <- auc(roc_linear)
+auc_logistic <- auc(roc_logistic)
+auc_rf <- auc(roc_rf)
+
+cat("AUC for Linear Regression:", auc_linear, "\n")
+cat("AUC for Logistic Regression:", auc_logistic, "\n")
+cat("AUC for Random Forest:", auc_rf, "\n")
+
+```
+
+```{r}
+ggplot() +
+  geom_line(aes(x = roc_linear$specificities, y = roc_linear$sensitivities, color = "Linear Regression"), size = 1) +
+  geom_line(aes(x = roc_logistic$specificities, y = roc_logistic$sensitivities, color = "Logistic Regression"), size = 1) +
+  geom_line(aes(x = roc_rf$specificities, y = roc_rf$sensitivities, color = "Random Forest"), size = 1) +
+  labs(x = "1 - Specificity", y = "Sensitivity (True Positive Rate)", title = "ROC Curves for Linear, Logistic, and Random Forest Models") +
+  scale_color_manual(values = c("blue", "green", "red")) + 
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+```
+
+
 :::
 
 
@@ -233,7 +285,95 @@ Recreate the ROC curve from the penalized logistic regression (logreg) and rando
 - Note: by estimating $\lambda$ each iteration, we are incorporating the uncertainty present in estimating that tuning parameter. 
     
 ::: {.callout-note title="Solution"} 
-Add solution here
+```{r}
+# Separate features and response
+X <- as.matrix(train_data[, c('spatial', 'temporal', 'tod', 'dow', 'LOC', 'POA', 'MOA', 'TIMERANGE')])
+y <- train_data$y  # Assuming response is binary (0 = unlinked, 1 = linked)
+
+#parameters
+alpha_logreg <- 0.75 #logistic regression alpha
+num_resamples <- 25 #number of resampling iterations
+holdout_size <- 500 #size of hold-out set
+
+#store results
+auc_logreg <- numeric(num_resamples)
+auc_rf <- numeric(num_resamples)
+roc_logreg_list <- list() # to store ROC curves for logref
+roc_rf_list <- list() #to store ROC curves for random forest
+
+set.seed(123) #for reproducibility
+
+#resampling loop
+for(i in 1:num_resamples){
+  # Step i: Randomly split the data into hold-out and training sets
+  holdout_indices <- sample(1:nrow(X), holdout_size)
+  X_holdout <- X[holdout_indices, ]
+  y_holdout <- y[holdout_indices]
+  X_train <- X[-holdout_indices, ]
+  y_train <- y[-holdout_indices]
+  
+  # Step ii: Logistic Regression (with 10-fold CV to estimate lambda)
+  X_train_scaled <- scale(X_train)  # Standardize the training data
+  cv_fit_logreg <- cv.glmnet(X_train_scaled, y_train, alpha = alpha_logreg, family = "binomial", nfolds = 10)
+  lambda_min <- cv_fit_logreg$lambda.min  # Get the best lambda
+  
+  #predict probabilities for the hold-out set
+  X_holdout_scaled <- scale(X_holdout) #standardize the hold-out data
+  logreg_probs <- predict(cv_fit_logreg, newx = X_holdout_scaled, s = lambda_min, type = "response")
+  
+  #step iii: Random Forest
+   rf_model <- randomForest(X_train, as.factor(y_train), ntree = 1000, mtry = 2)
+  rf_probs <- predict(rf_model, newdata = X_holdout, type = "prob")[,2]  # Get probabilities for class 1
+  
+  # Step iv: Calculate AUC for each model
+  roc_logreg <- roc(y_holdout, logreg_probs)
+  roc_rf <- roc(y_holdout, rf_probs)
+  
+  auc_logreg[i] <- auc(roc_logreg)
+  auc_rf[i] <- auc(roc_rf)
+  
+  # Store the ROC curves
+  roc_logreg_list[[i]] <- roc_logreg
+  roc_rf_list[[i]] <- roc_rf
+}
+
+#step v: calculate mean AUC and standard error
+mean_auc_logreg <- mean(auc_logreg)
+se_auc_logreg <- sd(auc_logreg) / sqrt(num_resamples)
+mean_auc_rf <- mean(auc_rf)
+se_auc_rf <- sd(auc_rf) / sqrt(num_resamples)
+
+```
+
+
+```{r}
+#report results
+cat("Logistic Regression (alpha = 0.75):\n")
+cat("Mean AUC:", mean_auc_logreg, "\n")
+cat("Standard Error:", se_auc_logreg, "\n\n")
+
+cat("Random Forest (mtry = 2, ntree = 1000):\n")
+cat("Mean AUC:", mean_auc_rf, "\n")
+cat("Standard Error:", se_auc_rf, "\n")
+
+#step vi: Plot ROC curves for both models
+#logistic regression ROC Plot
+ggplot() +
+  lapply(roc_logreg_list, function(roc) {
+    geom_line(aes(x = 1 - roc$specificities, y = roc$sensitivities), color = "blue", alpha = 0.3)
+  }) +
+  labs(x = "1 - Specificity", y = "Sensitivity", title = "ROC Curves for Penalized Logistic Regression") +
+  theme_minimal()
+
+# Random Forest ROC Plot
+ggplot() +
+  lapply(roc_rf_list, function(roc) {
+    geom_line(aes(x = 1 - roc$specificities, y = roc$sensitivities), color = "red", alpha = 0.3)
+  }) +
+  labs(x = "1 - Specificity", y = "Sensitivity", title = "ROC Curves for Random Forest") +
+  theme_minimal()
+```
+
 :::
 
 # Problem 4: Contest
@@ -253,7 +393,32 @@ $$
 where $M$ is the number of test observations, $\hat{p}_i$ is the prediction for the $i$th test observation, and $y_i \in \{0,1\}$ are the true test set labels. 
 
 ::: {.callout-note title="Solution"}
-Add solution here
+```{r}
+# Fit Elastic Net Logistic Regression (alpha = 0.75)
+alpha_logreg <- 0.75
+cv_fit_logreg <- cv.glmnet(X_train_scaled, y_train, alpha = alpha_logreg, family = "binomial", nfolds = 10)
+best_lambda <- cv_fit_logreg$lambda.min  # Get the best lambda from cross-validation
+
+# Preprocess the test data similarly (ensure the same scaling)
+X_test <- as.matrix(test_data[, c('spatial', 'temporal', 'tod', 'dow', 'LOC', 'POA', 'MOA', 'TIMERANGE')])
+X_test_scaled <- scale(X_test, center = attr(X_train_scaled, "scaled:center"), scale = attr(X_train_scaled, "scaled:scale"))
+
+# Load randomForest library
+library(randomForest)
+
+# Train Random Forest model
+rf_model <- randomForest(X_train, as.factor(y_train), ntree = 1000, mtry = 2)
+
+# Predict probabilities on test set
+rf_probs <- predict(rf_model, newdata = X_test, type = "prob")[,2]  # Probability for class 1
+
+# Save the predictions to a CSV file
+output_rf_df <- data.frame(p = rf_probs)
+
+colnames(output_rf_df)[1] <- "p"
+
+write.csv(output_rf_df, file = "hodge_courtney_1.csv", row.names = FALSE)
+```
 :::
 
 
@@ -268,5 +433,28 @@ Predict the linkages for the test data (using any model).
 - You will receive credit for a proper submission; the top five scores will receive 2 bonus points. Note: you only will get bonus credit for one of the two contests. 
 
 ::: {.callout-note title="Solution"}
-Add solution here
+```{r}
+#Fit elastic net logistic regression 
+alpha_logreg <- 0.75
+cv_fit_logreg <- cv.glmnet(X_train_scaled, y_train, alpha = alpha_logreg, family = "binomial", nfolds = 10)
+best_lambda <- cv_fit_logreg$lambda.min #get the best lambda from Cross Val
+
+#predict probabilities for the test set
+test_probs <- predict(cv_fit_logreg, newx = X_test_scaled, s= best_lambda, type = "response")
+
+#set a custom threshold to minimize False Negatives
+threshold <- 0.3 
+
+#predict linkage labels based on the adjusted threshold
+test_labels <- ifelse(test_probs > threshold, 1, 0)
+
+#create the output dataframe with a single column 'linkage' containing the labels
+output_df <- data.frame(linkage = test_labels)
+
+colnames(output_df)[1] <- "linkage"
+
+#save the predictions to a CSV file
+write.csv(output_df, file = "hodge_courtney_2.csv", row.names = FALSE)
+```
+
 :::
