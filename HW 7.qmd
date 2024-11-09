@@ -1,0 +1,180 @@
+---
+title: "Homework #7: Stacking and Boosting" 
+author: "Courtney Hodge"
+format: ds6030hw-html
+---
+
+```{r config, include=FALSE}
+# Set global configurations and settings here
+knitr::opts_chunk$set()                 # set global chunk options
+ggplot2::theme_set(ggplot2::theme_bw()) # set ggplot2 theme
+```
+
+
+# Stacking for Kaggle
+
+## load libraries & dataset
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(caret)
+library(xgboost)
+library(data.table)
+library(Matrix)
+library(Metrics)
+library(glmnet)  # For Ridge/Lasso models
+library(e1071) #for "skeweness" function
+```
+
+
+```{r}
+train <- read.csv("C:\\Users\\hodge\\Desktop\\UVA_Coding_Folder\\DS-6030-Statistical-Learning\\HW7_train.csv")
+
+test <- read.csv("C:\\Users\\hodge\\Desktop\\UVA_Coding_Folder\\DS-6030-Statistical-Learning\\HW7_test.csv")
+```
+
+## visualize the distribution of SalePrice
+
+```{r}
+ggplot(train, aes(x = SalePrice)) +
+  geom_histogram(bins = 100, fill = "white", color = "orange") +
+  labs(title = "Distribution of SalePrice")
+```
+
+## DataProcessing   
+```{r}
+#log-transform the SalePrice to normalize it
+train$SalePrice <- log(train$SalePrice)
+
+train[is.na(train)] <- -1  # Fill NA values with -1
+test[is.na(test)] <- -1  # Fill NA values with -1
+
+#Log-transform skewed numeric features
+numeric_feats <- names(train)[sapply(train, is.numeric)]
+
+skewed_feats <- sapply(train[numeric_feats], function(x) ifelse(skewness(x, na.rm = TRUE) > 0.75, TRUE, FALSE))
+
+train[numeric_feats[skewed_feats]] <- log1p(train[numeric_feats[skewed_feats]])
+
+test[numeric_feats[skewed_feats]] <- log1p(test[numeric_feats[skewed_feats]])
+```
+
+```{r}
+# Separate SalePrice from train data
+train_y <- train$SalePrice
+train <- train %>% select(-SalePrice)  # Remove SalePrice from training data
+
+# Convert train and test data to matrices with dummy variables
+train_x <- model.matrix(~. -1, data = train)
+test_x <- model.matrix(~. -1, data = test)
+
+# Ensure both datasets have the same columns
+missing_cols <- setdiff(colnames(train_x), colnames(test_x))
+test_x <- cbind(test_x, matrix(0, nrow = nrow(test_x), ncol = length(missing_cols)))
+colnames(test_x)[(ncol(test_x) - length(missing_cols) + 1):ncol(test_x)] <- missing_cols
+test_x <- test_x[, colnames(train_x)]
+
+
+```
+
+## Build the Models
+- Ridge
+- Lasso
+- XGBoost
+```{r}
+# Ridge regression with `cv.glmnet`
+ridge_model <- cv.glmnet(as.matrix(train_x), train_y, alpha = 0)
+
+# Prediction
+ridge_pred <- predict(ridge_model, s = ridge_model$lambda.min, newx = as.matrix(test_x))
+```
+
+```{r}
+# Lasso regression
+lasso_model <- cv.glmnet(as.matrix(train_x), train_y, alpha = 1)
+
+#prediction
+lasso_pred <- predict(lasso_model, s = lasso_model$lambda.min, newx = as.matrix(test_x))
+```
+
+
+
+
+```{r}
+#XGBoost
+# Duplicate train and test data for XGBoost
+train_x_xgb <- train_x
+test_x_xgb <- test_x
+
+
+# Replace NaN and Inf values in train_x_xgb with 0
+train_x_xgb[is.na(train_x_xgb)] <- 0
+train_x_xgb[is.infinite(train_x_xgb)] <- 0
+
+# Replace NaN and Inf values in test_x_xgb with 0
+test_x_xgb[is.na(test_x_xgb)] <- 0
+test_x_xgb[is.infinite(test_x_xgb)] <- 0
+```
+
+```{r}
+#XGBoost
+# Convert to xgboost format
+dtrain <- xgb.DMatrix(data = train_x_xgb, label = train_y)
+dtest <- xgb.DMatrix(data = test_x_xgb)
+
+# Train XGBoost model
+params <- list(
+  objective = "reg:squarederror",
+  eval_metric = "rmse",
+  eta = 0.01,
+  max_depth = 5
+)
+xgb_model <- xgb.train(params, dtrain, nrounds = 1000, watchlist = list(train = dtrain), early_stopping_rounds = 50)
+xgb_pred <- predict(xgb_model, dtest)
+```
+
+#Model Averaging and Stacking
+```{r}
+# Simple averaging of predictions
+average_pred <- (ridge_pred + lasso_pred + xgb_pred) / 3
+```
+
+```{r}
+stack_train <- data.frame(
+  ridge_pred = predict(ridge_model, s = ridge_model$lambda.min, newx = as.matrix(train_x)),
+  lasso_pred = predict(lasso_model, s = lasso_model$lambda.min, newx = as.matrix(train_x)),
+  xgb_pred = predict(xgb_model, dtrain)
+)
+stack_test <- data.frame(
+  ridge_pred = ridge_pred,
+  lasso_pred = lasso_pred,
+  xgb_pred = xgb_pred
+)
+
+#Fit a meta-model on the stacked predictions
+meta_model <- lm(train_y~., data = stack_train)
+stacked_pred <- predict(meta_model, stack_test)
+```
+
+Problem:
+- there was a problem when I submitted my code the first time to kaggle. One of the lines had an NaN value and I could not figure out where I went wrong in my code. The only solution I could think of was to fill the NaN value with the mean_value of the SalePrice in the submission dataset I intended to submit. 
+
+```{r}
+final_predictions <- exp(stacked_pred)
+
+submission <- data.frame(Id = test$Id, SalePrice = final_predictions)
+
+if (any(is.nan(submission$SalePrice))) {
+  mean_value <- mean(submission$SalePrice, na.rm = TRUE)
+  
+  # Replace NaN with the mean value
+  submission$SalePrice[is.nan(submission$SalePrice)] <- mean_value
+}
+```
+
+
+# Evaluation and Submission
+```{r}
+write.csv(submission, "submission.csv", row.names = FALSE)
+```
+
